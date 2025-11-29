@@ -233,15 +233,15 @@ with right_col:
             x=alt.X("invoice_year_month:N", title="Month")
         )
         bar_invoice = base.mark_bar(color="#4472C4").encode(
-    y=alt.Y("total_invoice:Q", title="Amount", axis=alt.Axis(format=",.0f")),
+    y=alt.Y("total_invoice:Q", title="Amount"),
     tooltip=[
-        alt.Tooltip("invoice_year_month:N", title="Month"),
-        alt.Tooltip("total_invoice:Q", title="Total invoice", format=",.0f"),
-        alt.Tooltip("total_outstanding:Q", title="Outstanding", format=",.0f"),
-        alt.Tooltip("total_receipt:Q", title="Total receipt", format=",.0f"),
-        alt.Tooltip("acc_receipt:Q", title="Acc. receipt", format=",.0f"),
+        "invoice_year_month",
+        "total_invoice",
+        "total_outstanding",
+        "total_receipt",
+        "acc_receipt",
     ],
-        )
+)
 
         bar_receipt = base.mark_bar(color="#ED7D31", opacity=0.8).encode(
             y="total_receipt:Q"
@@ -430,5 +430,6 @@ else:
         .properties(height=350)
     )
     st.altair_chart(heatmap, use_container_width=True)
+
 
 
