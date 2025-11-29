@@ -15,9 +15,14 @@ st.set_page_config(
 # LOAD & CLEAN DATA
 # ---------------------------------------------------
 @st.cache_data
+@st.cache_data
 def load_data():
-    # อ่านไฟล์จากโฟลเดอร์เดียวกับ app.py
-    df = pd.read_csv("BI Project status_Prototype- Invoice.csv")
+    DATA_URL = "https://raw.githubusercontent.com/techasit239/my_streamlit/refs/heads/main/BI%20Project%20status_Prototype-%20Invoice.csv"
+
+    df = pd.read_csv(DATA_URL)
+
+    return df
+
 
     # ---- แปลงปีโครงการให้เป็นตัวเลข ----
     df["project_year"] = pd.to_numeric(df["Project year"], errors="coerce")
@@ -275,3 +280,4 @@ else:
         ].sort_values("invoice_date"),
         use_container_width=True,
     )
+
