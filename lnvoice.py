@@ -241,7 +241,8 @@ with right_col:
         alt.Tooltip("total_receipt:Q", title="Total receipt", format=",.0f"),
         alt.Tooltip("acc_receipt:Q", title="Acc. receipt", format=",.0f"),
     ],
-)
+        )
+
         bar_receipt = base.mark_bar(color="#ED7D31", opacity=0.8).encode(
             y="total_receipt:Q"
         )
@@ -429,4 +430,5 @@ else:
         .properties(height=350)
     )
     st.altair_chart(heatmap, use_container_width=True)
+
 
