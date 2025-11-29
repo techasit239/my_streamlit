@@ -15,34 +15,32 @@ st.set_page_config(
 # LOAD & CLEAN DATA
 # ---------------------------------------------------
 @st.cache_data
-@st.cache_data
 def load_data():
-    DATA_URL = "https://raw.githubusercontent.com/techasit239/my_streamlit/refs/heads/main/BI%20Project%20status_Prototype-%20Invoice.csv"
+    DATA_URL = (
+        "https://raw.githubusercontent.com/techasit239/my_streamlit/"
+        "refs/heads/main/BI%20Project%20status_Prototype-%20Invoice.csv"
+    )
 
     df = pd.read_csv(DATA_URL)
 
-    return df
-
-
-    # ---- แปลงปีโครงการให้เป็นตัวเลข ----
+    # --------- 1) Project year เป็นตัวเลข ---------
     df["project_year"] = pd.to_numeric(df["Project year"], errors="coerce")
 
-    # ---- แปลงวันที่หลักที่ใช้ทำกราฟ (ใช้ Invoice plan date เป็นแกนเวลา) ----
+    # --------- 2) แปลงวันที่หลัก (ใช้ Invoice plan date เป็นแกนเวลา) ---------
     df["invoice_date"] = pd.to_datetime(
-        df["Invoice plan date"], errors="coerce", dayfirst=False, infer_datetime_format=True
+        df["Invoice plan date"], errors="coerce", infer_datetime_format=True
     )
 
-    # ถ้า invoice_date ว่างเยอะ จะ fallback ไปใช้ Issued Date
+    # ถ้า invoice_date ว่าง → fallback ไปใช้ Issued Date
     mask_missing = df["invoice_date"].isna()
     if mask_missing.any():
         df.loc[mask_missing, "invoice_date"] = pd.to_datetime(
             df.loc[mask_missing, "Issued Date"],
             errors="coerce",
-            dayfirst=False,
             infer_datetime_format=True
         )
 
-    # ---- แปลงจำนวนเงินให้เป็นตัวเลข ----
+    # --------- 3) แปลงจำนวนเงินให้เป็นตัวเลข ---------
     money_cols = [" Total amount ", " Invoice value ", "Claim Plan 2025"]
     for c in money_cols:
         df[c + "_num"] = (
@@ -53,21 +51,24 @@ def load_data():
         )
         df[c + "_num"] = pd.to_numeric(df[c + "_num"], errors="coerce").fillna(0.0)
 
-    # สร้างชื่อสั้น ๆ
+    # ตั้งชื่อสั้น ๆ เอาไปใช้ต่อ
     df["invoice_amount"] = df[" Invoice value _num"]
+    df["total_amount"] = df[" Total amount _num"]
     df["claim_plan_2025"] = df["Claim Plan 2025_num"]
 
-    # ---- กำหนดรับชำระ: สมมติว่า Paid = รับชำระครบ, สถานะอื่นยังไม่รับ ----
+    # --------- 4) สมมติ receipt = จ่ายครบเมื่อ Payment Status == 'Paid' ---------
+    df["Payment Status_clean"] = df["Payment Status"].astype(str).str.strip().str.lower()
+
     df["receipt_amount"] = np.where(
-        df["Payment Status"].astype(str).str.strip().str.lower() == "paid",
+        df["Payment Status_clean"] == "paid",
         df["invoice_amount"],
         0.0,
     )
 
-    # ---- ยอดค้างชำระ ----
+    # --------- 5) Outstanding = invoice - receipt ---------
     df["outstanding_amount"] = df["invoice_amount"] - df["receipt_amount"]
 
-    # ---- Dimension ปี / ไตรมาส / เดือน จาก invoice_date ----
+    # --------- 6) สร้าง Year / Quarter / Month / Year-Month ---------
     df["invoice_year"] = df["invoice_date"].dt.year
     df["invoice_quarter"] = "Qtr " + df["invoice_date"].dt.quarter.astype("Int64").astype(str)
     df["invoice_month_name"] = df["invoice_date"].dt.month_name()
@@ -79,16 +80,19 @@ def load_data():
 df = load_data()
 
 # ---------------------------------------------------
-# FILTER ZONE (ด้านล่างซ้ายของภาพ: Project year / Quarter / Month)
+# SIDEBAR FILTERS (Project year / Quarter / Month / Customer / Aging)
 # ---------------------------------------------------
 st.sidebar.header("Filters")
 
-# ปีโครงการ (ใช้คอลัมน์ project_year จากไฟล์)
-years = sorted([y for y in df["project_year"].dropna().unique()])
-default_year = 2025 if 2025 in years else years[-1]  # ถ้ามีปี 2025 ให้เลือกเป็นค่าเริ่มต้น
-year_selected = st.sidebar.radio("Project year analysis", years, index=years.index(default_year))
+# ปีโครงการ (Project year)
+years = sorted([int(y) for y in df["project_year"].dropna().unique()])
+default_year = 2025 if 2025 in years else years[-1]
+year_selected = st.sidebar.radio(
+    "Project year analysis",
+    years,
+    index=years.index(default_year)
+)
 
-# Filter ตามปีโครงการ
 df_filtered = df[df["project_year"] == year_selected].copy()
 
 # Quarter
@@ -105,30 +109,30 @@ month_selected = st.sidebar.selectbox("Month", month_opts, index=0)
 if month_selected != "--":
     df_filtered = df_filtered[df_filtered["invoice_month_name"] == month_selected]
 
-# Analysis by Customer (dropdown เหมือนในรูป)
+# Analysis by Customer
 customers = ["All"] + sorted(df_filtered["Customer"].dropna().unique())
 customer_selected = st.sidebar.selectbox("Analysis by Customer", customers, index=0)
 
 if customer_selected != "All":
     df_filtered = df_filtered[df_filtered["Customer"] == customer_selected]
 
-# Aging checkbox ด้านขวา (ใช้ Payment Status)
+# Aging / Payment Status
 aging_all = sorted(df["Payment Status"].dropna().unique())
 aging_selected = st.sidebar.multiselect(
-    "Aging (Payment Status)",
+    "Payment Status (Aging)",
     aging_all,
-    default=aging_all,   # เปิดทุกค่าไว้ก่อนเหมือนในภาพ
+    default=aging_all
 )
 if aging_selected:
     df_filtered = df_filtered[df_filtered["Payment Status"].isin(aging_selected)]
 
 # ---------------------------------------------------
-# TOP KPI (3 กล่องบนสุด)
+# TOP KPIs
 # ---------------------------------------------------
 def fmt_million(x: float) -> str:
     return f"{x/1_000_000:,.1f} M"
 
-st.markdown("### Project Billing Dashboard")
+st.markdown("## Invoice & Receipt Dashboard")
 
 total_invoice = float(df_filtered["invoice_amount"].sum())
 total_receipt = float(df_filtered["receipt_amount"].sum())
@@ -139,28 +143,28 @@ k1, k2, k3 = st.columns(3)
 with k1:
     st.markdown("**Sum of Total invoice billing**")
     st.markdown(
-        f"<h1 style='color:red; font-size: 40px;'>{fmt_million(total_invoice)}</h1>",
+        f"<h1 style='color:#C00000; font-size: 36px;'>{fmt_million(total_invoice)}</h1>",
         unsafe_allow_html=True,
     )
 
 with k2:
     st.markdown("**Total receipt**")
     st.markdown(
-        f"<h1 style='color:red; font-size: 40px;'>{fmt_million(total_receipt)}</h1>",
+        f"<h1 style='color:#C00000; font-size: 36px;'>{fmt_million(total_receipt)}</h1>",
         unsafe_allow_html=True,
     )
 
 with k3:
     st.markdown("**Outstanding balance**")
     st.markdown(
-        f"<h1 style='color:red; font-size: 40px;'>{fmt_million(outstanding)}</h1>",
+        f"<h1 style='color:#C00000; font-size: 36px;'>{fmt_million(outstanding)}</h1>",
         unsafe_allow_html=True,
     )
 
 st.markdown("---")
 
 # ---------------------------------------------------
-# MID LAYOUT: LEFT = bar by customer, RIGHT = combo chart month
+# MIDDLE LAYOUT: LEFT = Outstanding by Customer, RIGHT = Combo Chart by Month
 # ---------------------------------------------------
 left_col, right_col = st.columns([1, 2])
 
@@ -177,9 +181,10 @@ with left_col:
             .sort_values("outstanding_amount", ascending=True)
         )
 
-        # slider ช่วงยอดค้างเหมือนในภาพ (optional แต่ใส่ให้คล้าย)
+        # slider ช่วง Outstanding (เหมือน filter ช่วงตัวเลขใน Power BI)
         min_val = float(cust_group["outstanding_amount"].min())
         max_val = float(cust_group["outstanding_amount"].max())
+
         if min_val == max_val:
             range_selected = (min_val, max_val)
         else:
@@ -189,6 +194,7 @@ with left_col:
                 max_value=max_val,
                 value=(min_val, max_val),
             )
+
             cust_group = cust_group[
                 cust_group["outstanding_amount"].between(range_selected[0], range_selected[1])
             ]
@@ -206,7 +212,7 @@ with left_col:
 
         st.altair_chart(bar, use_container_width=True)
 
-# ---------- RIGHT: Combo chart (invoice, outstanding, receipt, accumulated receipt) ----------
+# ---------- RIGHT: Combo chart Invoice / Receipt / Accumulated Receipt ----------
 with right_col:
     st.markdown(
         "#### Sum of Total invoice billing, Outstanding balance, "
@@ -226,14 +232,13 @@ with right_col:
             .sort_values("invoice_year_month")
         )
 
-        # ยอดสะสม receipt
         month_group["acc_receipt"] = month_group["total_receipt"].cumsum()
 
         base = alt.Chart(month_group).encode(
             x=alt.X("invoice_year_month:N", title="Month")
         )
 
-        bar_invoice = base.mark_bar(color="#1f77b4").encode(
+        bar_invoice = base.mark_bar(color="#4472C4").encode(
             y=alt.Y("total_invoice:Q", title="Amount"),
             tooltip=[
                 "invoice_year_month",
@@ -244,11 +249,11 @@ with right_col:
             ],
         )
 
-        bar_receipt = base.mark_bar(color="#ff7f0e", opacity=0.7).encode(
+        bar_receipt = base.mark_bar(color="#ED7D31", opacity=0.8).encode(
             y="total_receipt:Q"
         )
 
-        line_acc = base.mark_line(color="purple", point=True).encode(
+        line_acc = base.mark_line(color="#A020F0", point=True).encode(
             y="acc_receipt:Q"
         )
 
@@ -259,7 +264,7 @@ with right_col:
 st.markdown("---")
 
 # ---------------------------------------------------
-# OPTIONAL: ตารางรายละเอียดด้านล่าง
+# DETAIL TABLE ด้านล่าง
 # ---------------------------------------------------
 st.markdown("#### Detail table")
 
@@ -280,4 +285,3 @@ else:
         ].sort_values("invoice_date"),
         use_container_width=True,
     )
-
