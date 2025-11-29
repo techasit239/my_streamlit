@@ -192,16 +192,23 @@ with left_col:
             ]
 
         bar = (
-            alt.Chart(cust_group)
-            .mark_bar()
-            .encode(
-                x=alt.X("outstanding_amount:Q", title="Outstanding balance"),
-                y=alt.Y("Customer:N", sort="-x", title="Customer"),
-                tooltip=["Customer", "outstanding_amount"],
-            )
-            .properties(height=320)
-        )
-        st.altair_chart(bar, use_container_width=True)
+    alt.Chart(cust_group)
+    .mark_bar()
+    .encode(
+        x=alt.X(
+            "outstanding_amount:Q",
+            title="Outstanding balance",
+            axis=alt.Axis(format=",.0f"),
+        ),
+        y=alt.Y("Customer:N", sort="-x", title="Customer"),
+        tooltip=[
+            alt.Tooltip("Customer:N", title="Customer"),
+            alt.Tooltip("outstanding_amount:Q", title="Outstanding", format=",.0f"),
+        ],
+    )
+    .properties(height=320)
+)
+
 
 with right_col:
     st.markdown(
@@ -226,15 +233,15 @@ with right_col:
             x=alt.X("invoice_year_month:N", title="Month")
         )
         bar_invoice = base.mark_bar(color="#4472C4").encode(
-            y=alt.Y("total_invoice:Q", title="Amount"),
-            tooltip=[
-                "invoice_year_month",
-                "total_invoice",
-                "total_outstanding",
-                "total_receipt",
-                "acc_receipt",
-            ],
-        )
+    y=alt.Y("total_invoice:Q", title="Amount", axis=alt.Axis(format=",.0f")),
+    tooltip=[
+        alt.Tooltip("invoice_year_month:N", title="Month"),
+        alt.Tooltip("total_invoice:Q", title="Total invoice", format=",.0f"),
+        alt.Tooltip("total_outstanding:Q", title="Outstanding", format=",.0f"),
+        alt.Tooltip("total_receipt:Q", title="Total receipt", format=",.0f"),
+        alt.Tooltip("acc_receipt:Q", title="Acc. receipt", format=",.0f"),
+    ],
+)
         bar_receipt = base.mark_bar(color="#ED7D31", opacity=0.8).encode(
             y="total_receipt:Q"
         )
@@ -422,3 +429,4 @@ else:
         .properties(height=350)
     )
     st.altair_chart(heatmap, use_container_width=True)
+
