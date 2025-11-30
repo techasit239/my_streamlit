@@ -5,6 +5,8 @@ import pandas as pd
 import streamlit as st
 from ollama import chat
 from streamlit_gsheets import GSheetsConnection
+
+from add_record_form import render_invoice_form, render_project_form
 try:
     from pypdf import PdfReader
 except Exception:
@@ -272,7 +274,10 @@ with nav_cols[0]:
 with nav_cols[1]:
     st.page_link("pages/Invoice.py", label="🧾 Invoice dashboard")
 with nav_cols[2]:
-    st.page_link("pages/Add_Record.py", label="➕ Add record")
+    with st.popover("➕ Add project record", use_container_width=True):
+        render_project_form(form_key="ai_add_project_form")
+    with st.popover("➕ Add invoice record", use_container_width=True):
+        render_invoice_form(form_key="ai_add_invoice_form")
 
 try:
     project_df, invoice_df, meta = load_project_invoice()

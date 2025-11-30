@@ -6,6 +6,8 @@ import plotly.graph_objects as go
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 
+from add_record_form import render_project_form
+
 st.set_page_config(page_title="Project Management", page_icon="📊", layout="wide")
 
 
@@ -160,33 +162,34 @@ else:
 
 nav_cols = st.columns(3)
 with nav_cols[0]:
-    st.page_link("pages/Invoice.py", label="↩️ Go to Invoice dashboard", icon="🧾")
+    st.page_link("pages/Invoice.py", label="Go to Invoice dashboard", icon="🧾")
 with nav_cols[1]:
-    st.page_link("pages/project.py", label="🔄 Stay on Project dashboard", icon="📊")
+    st.page_link("pages/project.py", label="Stay on Project dashboard", icon="📊")
 with nav_cols[2]:
-    st.page_link("pages/Add_Record.py", label="➕ Add record", icon="➕")
+    with st.popover("➕ Add project record", use_container_width=True):
+        render_project_form(form_key="project_add_form")
 
 with st.sidebar:
     st.header("Filters")
     engineer_filter = st.multiselect(
         "Project engineer",
         sorted(project_df["Project Engineer"].dropna().unique()),
-        default=sorted(project_df["Project Engineer"].dropna().unique()),
+        default=[],
     )
     project_filter = st.multiselect(
         "Project",
         sorted(project_df["Project"].dropna().unique()),
-        default=sorted(project_df["Project"].dropna().unique()),
+        default=[],
     )
     year_filter = st.multiselect(
         "Project year",
         sorted(project_df["Project year"].dropna().unique()),
-        default=sorted(project_df["Project year"].dropna().unique()),
+        default=[],
     )
     status_filter = st.multiselect(
         "Status",
         sorted(project_df["Status"].dropna().unique()),
-        default=sorted(project_df["Status"].dropna().unique()),
+        default=[],
     )
     phrase_filter = st.multiselect(
         "Project phrase",

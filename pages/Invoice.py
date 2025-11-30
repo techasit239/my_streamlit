@@ -5,6 +5,8 @@ import plotly.express as px
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 
+from add_record_form import render_invoice_form
+
 st.set_page_config(page_title="Invoice Dashboard", page_icon="🧾", layout="wide")
 
 
@@ -183,11 +185,12 @@ st.caption(
 )
 nav_cols = st.columns(3)
 with nav_cols[0]:
-    st.page_link("pages/project.py", label="↩️ Go to Project dashboard", icon="📊")
+    st.page_link("pages/project.py", label="Go to Project dashboard", icon="📊")
 with nav_cols[1]:
-    st.page_link("pages/Invoice.py", label="🔄 Stay on Invoice dashboard", icon="🧾")
+    st.page_link("pages/Invoice.py", label="Stay on Invoice dashboard", icon="🧾")
 with nav_cols[2]:
-    st.page_link("pages/Add_Record.py", label="➕ Add record", icon="➕")
+    with st.popover("➕ Add invoice record", use_container_width=True):
+        render_invoice_form(form_key="invoice_add_form")
 
 # Sync invoice rows with project metadata for richer visuals.
 invoice_df["Order number"] = invoice_df.get("Sale order No.", pd.Series(dtype=object)).apply(normalize_order_number)
