@@ -1,9 +1,11 @@
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Tuple
+import os
 
 import pandas as pd
 import streamlit as st
 from ollama import chat
+from openai import OpenAI
 from streamlit_gsheets import GSheetsConnection
 
 from add_record_form import render_invoice_form, render_project_form
@@ -21,6 +23,13 @@ PROJECT_WORKFLOW = (
     "7) Completed (no delay considered)."
 )
 
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+grok_client = None
+if OPENROUTER_API_KEY:
+    try:
+        grok_client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=OPENROUTER_API_KEY)
+    except Exception:
+        grok_client = None
 
 # -----------------------------
 # Data loading (same sources as dashboards)
@@ -240,7 +249,7 @@ def rank_docs(query: str, docs: List[Dict[str, str]], top_k: int = 10):
     return top
 
 
-def call_ollama_stream(question: str, context: List[Dict[str, str]]) -> Generator[str, None, None]:
+def call_model_stream(question: str, context: List[Dict[str, str]], model_choice: str) -> Generator[str, None, None]:
     ctx_block = "\n".join([f"- ({d['source']}) {d['text']}" for d in context])
     system_prompt = (
         "You are an expert in project management (PMP/PMBOK) and an assistant for project/invoice data. "
@@ -251,15 +260,33 @@ def call_ollama_stream(question: str, context: List[Dict[str, str]]) -> Generato
         "ตอบเป็นภาษาไทยถ้าคำถามเป็นภาษาไทย และตอบเป็นอังกฤษถ้าคำถามเป็นอังกฤษ."
     )
     user_prompt = f"Context:\n{ctx_block}\n\nQuestion: {question}"
-    for chunk in chat(
-        model="gemma3",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        stream=True,
-    ):
-        yield chunk["message"]["content"]
+
+    if model_choice == "grok":
+        if grok_client is None:
+            raise RuntimeError("Grok client unavailable: set OPENROUTER_API_KEY in .env")
+        stream = grok_client.chat.completions.create(
+            model="x-ai/grok-4.1-fast:free",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            extra_body={"reasoning": {"enabled": True}},
+            stream=True,
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta.content if chunk.choices else None
+            if delta:
+                yield delta
+    else:
+        for chunk in chat(
+            model="gemma3",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            stream=True,
+        ):
+            yield chunk.get("message", {}).get("content") if isinstance(chunk, dict) else ""
 
 
 # -----------------------------
@@ -290,6 +317,12 @@ except Exception as exc:  # noqa: BLE001
     st.error(f"โหลดข้อมูลไม่สำเร็จ: {exc}", icon="🚫")
     st.stop()
 
+model_choice = st.selectbox(
+    "Model",
+    ["ollama_gemma3", "grok_openrouter"],
+    format_func=lambda v: "Grok (OpenRouter)" if v == "grok_openrouter" else "Ollama gemma3 (local)",
+    help="เลือกโมเดล: Grok ใช้ API key จาก OPENROUTER_API_KEY ใน .env, ส่วน Ollama ใช้โมเดล gemma3 ในเครื่อง",
+)
 domain = st.radio("แหล่งข้อมูลที่ใช้ประกอบคำตอบ", ["both", "project", "invoice"], horizontal=True, index=0,
                   format_func=lambda x: {"both": "Project + Invoice", "project": "Project only", "invoice": "Invoice only"}[x])
 pmbok_use = st.checkbox("ใช้ความรู้จาก PMBOK (PDF) ประกอบ", value=True if 'pmbok_chunks' in locals() and pmbok_chunks else False)
@@ -316,13 +349,14 @@ if st.button("Ask AI", type="primary", disabled=not question.strip()):
         corpus = build_corpus(project_df, invoice_df, domain, pmbok_use, pmbok_chunks, include_workflow=True)
         context = rank_docs(question, corpus, top_k=8)
         try:
-            stream = call_ollama_stream(question, context)
+            chosen = "grok" if model_choice == "grok_openrouter" else "ollama"
+            stream = call_model_stream(question, context, chosen)
             st.subheader("Answer:")
             st.write_stream(stream)
             with st.expander("ดูบริบทที่ใช้ตอบ (context)"):
                 for idx, doc in enumerate(context, 1):
                     st.markdown(f"{idx}. **{doc['source']}** — {doc['text']}")
         except Exception as exc:  # noqa: BLE001
-            st.error(f"เรียก Ollama ไม่สำเร็จ: {exc}")
+            st.error(f"เรียกโมเดลไม่สำเร็จ: {exc}")
 elif not question.strip():
     st.info("พิมพ์คำถามก่อน แล้วกด Ask AI")
