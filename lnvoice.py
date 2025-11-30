@@ -255,28 +255,6 @@ with right_col:
 st.markdown("---")
 
 # ---------------------------------------------------
-# DETAIL TABLE
-# ---------------------------------------------------
-st.markdown("#### Detail table")
-if df_filtered.empty:
-    st.info("No data for current filters.")
-else:
-    st.dataframe(
-        df_filtered[
-            [
-                "invoice_date",
-                "project_year",
-                "Customer",
-                "invoice_amount",
-                "receipt_amount",
-                "outstanding_amount",
-                "Payment Status",
-            ]
-        ].sort_values("invoice_date"),
-        use_container_width=True,
-    )
-
-# ---------------------------------------------------
 # SECTION A: Delay Analysis
 # ---------------------------------------------------
 st.markdown("## ⏱️ Delay Analysis")
@@ -431,5 +409,26 @@ else:
     )
     st.altair_chart(heatmap, use_container_width=True)
 
+# ---------------------------------------------------
+# DETAIL TABLE
+# ---------------------------------------------------
+st.markdown("#### Detail table")
+if df_filtered.empty:
+    st.info("No data for current filters.")
+else:
+    st.dataframe(
+        df_filtered[
+            [
+                "invoice_date",
+                "project_year",
+                "Customer",
+                "invoice_amount",
+                "receipt_amount",
+                "outstanding_amount",
+                "Payment Status",
+            ]
+        ].sort_values("invoice_date"),
+        use_container_width=True,
+    )
 
 
