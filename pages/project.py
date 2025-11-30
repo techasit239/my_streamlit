@@ -8,6 +8,11 @@ from streamlit_gsheets import GSheetsConnection
 
 from add_record_form import render_project_form
 
+try:
+    from ollama import chat as ollama_chat
+except Exception:
+    ollama_chat = None
+
 st.set_page_config(page_title="Project Management", page_icon="📊", layout="wide")
 
 
@@ -30,6 +35,46 @@ def metric_card(label: str, value: str, fg: str = "#0f172a", bg: str = "#f5f7fb"
         <div style="font-size: 22px; font-weight: 700; color: {fg}; line-height: 1.2;">{value}</div>
     </div>
     """
+
+
+def ai_chart_summary(title: str, df: pd.DataFrame, hint: str, key: str) -> None:
+    """
+    Render a button that asks AI to summarize a chart based on its data.
+    Keeps the latest summary in session_state until page refresh/leave.
+    """
+    state_key = f"ai_summary_{key}"
+    if st.button(f"🤖 AI summarize: {title}", key=key, use_container_width=True):
+        if ollama_chat is None:
+            st.error("AI client (ollama) is not available on this host.")
+            return
+        data_preview = "No data"
+        if df is not None and not df.empty:
+            data_preview = df.head(50).to_csv(index=False)
+        system_prompt = (
+            "คุณเป็นนักวิเคราะห์ข้อมูลที่สรุปผลกระชับเป็นภาษาไทยเท่านั้น "
+            "สรุปกราฟด้านล่างเป็น bullet 2-4 ข้อ ระบุแนวโน้ม จุดสูง/ต่ำ ความเสี่ยง และข้อเสนอแนะที่เป็นไปได้ "
+            "ถ้าข้อมูลไม่พอให้บอกอย่างตรงไปตรงมา"
+        )
+        user_prompt = (
+            f"หัวข้อกราฟ: {title}\n"
+            f"บริบทกราฟ: {hint}\n"
+            f"ข้อมูล (CSV แถวตัวอย่าง):\n{data_preview}\n"
+            "ช่วยสรุปข้อมูลกราฟนี้เป็น bullet ภาษาไทย"
+        )
+        with st.spinner("กำลังสรุปด้วย AI..."):
+            try:
+                resp = ollama_chat(
+                    model="gemma3",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                )
+                st.session_state[state_key] = resp["message"]["content"]
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"AI summary failed: {exc}")
+    if state_key in st.session_state:
+        st.info(st.session_state[state_key])
 
 
 def clean_project(df: pd.DataFrame) -> pd.DataFrame:
@@ -253,7 +298,7 @@ st.divider()
 
 st.markdown("## Delivery & progress")
 st.caption("ภาพรวมยอดมูลค่า/คงเหลือต่อออเดอร์ และเกจความคืบหน้าที่สรุปเฉลี่ยทุกโครงการ")
-val_col_left, val_col_right = st.columns([1.1, 0.9])
+val_col_left, val_col_right = st.columns(2)
 
 with val_col_left:
     st.caption("Top 20 orders by value (stacked with balance)")
@@ -291,7 +336,7 @@ with val_col_left:
         order_fig.update_layout(
             showlegend=True,
             margin=dict(l=10, r=10, t=30, b=10),
-            height=480,
+            height=420,
             yaxis=dict(
                 title="Order number",
                 tickfont=dict(size=13),
@@ -303,6 +348,12 @@ with val_col_left:
             bargap=0.2,
         )
         st.plotly_chart(order_fig, use_container_width=True)
+        ai_chart_summary(
+            "Top 20 orders by value (with balance)",
+            order_summary[["Order display", "Project Value", "Balance"]],
+            "Each row is an order; Project Value and Balance are amounts.",
+            key="ai_order_summary",
+        )
     else:
         st.info("No order number data to display.")
 
@@ -324,13 +375,30 @@ with val_col_right:
             },
         )
     )
-    gauge.update_layout(height=320, margin=dict(l=10, r=10, t=20, b=20))
+    gauge.update_layout(height=420, margin=dict(l=10, r=10, t=20, b=20))
     st.plotly_chart(gauge, use_container_width=True, config={"displayModeBar": False})
     st.caption("ค่าความคืบหน้าเฉลี่ยหลังกรองข้อมูล ใช้ดูภาพรวมการส่งมอบ")
     status_cols = st.columns(3)
     status_cols[0].markdown(metric_card("Delayed", int(status_totals.get("Delayed", 0)), fg="#dc2626", bg="#fff2f2"), unsafe_allow_html=True)
     status_cols[1].markdown(metric_card("On track", int(status_totals.get("On track", 0)), fg="#15803d", bg="#ecfdf3"), unsafe_allow_html=True)
     status_cols[2].markdown(metric_card("Shipped", int(status_totals.get("Shipped", 0)), fg="#0ea5e9", bg="#f0f9ff"), unsafe_allow_html=True)
+    status_df = pd.DataFrame(
+        {
+            "Metric": ["Avg progress %", "Delayed count", "On track count", "Shipped count"],
+            "Value": [
+                round(avg_progress_pct, 2),
+                int(status_totals.get("Delayed", 0)),
+                int(status_totals.get("On track", 0)),
+                int(status_totals.get("Shipped", 0)),
+            ],
+        }
+    )
+    ai_chart_summary(
+        "Progress gauge and status counts",
+        status_df,
+        "Gauge shows average progress percentage; counts show number of projects per status.",
+        key="ai_progress_gauge",
+    )
 
 st.divider()
 
@@ -352,7 +420,14 @@ with pie_col1:
             color_discrete_sequence=px.colors.qualitative.Set2,
         )
         eng_fig.update_traces(hovertemplate="<b>%{label}</b><br>Value: %{value:,.0f}<br>%{percent}")
+        eng_fig.update_layout(height=420)
         st.plotly_chart(eng_fig, use_container_width=True)
+        ai_chart_summary(
+            "Project value by engineer",
+            engineer_value,
+            "Sum of project value by project engineer; values are currency amounts.",
+            key="ai_engineer_pie",
+        )
     else:
         st.info("No engineer data.")
 with pie_col2:
@@ -370,7 +445,14 @@ with pie_col2:
             color_discrete_sequence=px.colors.qualitative.Set3,
         )
         cust_fig.update_traces(hovertemplate="<b>%{label}</b><br>Value: %{value:,.0f}<br>%{percent}")
+        cust_fig.update_layout(height=420)
         st.plotly_chart(cust_fig, use_container_width=True)
+        ai_chart_summary(
+            "Project value by customer",
+            customer_value,
+            "Sum of project value by customer; values are currency amounts.",
+            key="ai_customer_pie",
+        )
     else:
         st.info("No customer data.")
 
@@ -378,7 +460,7 @@ st.divider()
 
 st.markdown("## Operations & status")
 st.caption("ซัพพลายเชน: จำนวนสินค้าแยกผู้ผลิต/สินค้า, พร้อมสถานะและคำสำคัญของโครงการ")
-table_col_left, table_col_right = st.columns([1.25, 1])
+table_col_left, table_col_right = st.columns(2)
 
 with table_col_left:
     st.caption("Manufactured by / Product (sum of Qty)")
@@ -399,8 +481,14 @@ with table_col_left:
         )
         manu_fig.update_traces(hovertemplate="<b>%{customdata[0]}</b><br>%{y}<br>Qty: %{x:,.0f}")
         manu_fig.update_traces(customdata=qty_by_manu[["Product"]])
-        manu_fig.update_layout(margin=dict(l=10, r=10, t=30, b=10), height=360)
+        manu_fig.update_layout(margin=dict(l=10, r=10, t=30, b=10), height=420)
         st.plotly_chart(manu_fig, use_container_width=True)
+        ai_chart_summary(
+            "Units by manufacturer and product",
+            qty_by_manu,
+            "Sum of quantity (Qty) grouped by manufacturer and product; sorted by Qty.",
+            key="ai_manu_qty",
+        )
     else:
         st.info("No manufacturing data.")
 
@@ -423,8 +511,14 @@ with table_col_right:
             color_continuous_scale="Greens",
         )
         phrase_fig.update_traces(hovertemplate="<b>%{y}</b><br>Projects: %{x}")
-        phrase_fig.update_layout(margin=dict(l=10, r=10, t=30, b=10), height=360)
+        phrase_fig.update_layout(margin=dict(l=10, r=10, t=30, b=10), height=420)
         st.plotly_chart(phrase_fig, use_container_width=True)
+        ai_chart_summary(
+            "Project phrases (keywords)",
+            phrase_counts,
+            "Counts of project phrases/keywords; top 15 shown.",
+            key="ai_phrase_counts",
+        )
     else:
         st.info("No phrase data.")
 
