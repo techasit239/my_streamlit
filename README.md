@@ -9,7 +9,7 @@ pip install -r requirements.txt
 https://drive.google.com/drive/folders/17qHpIHABuO6pZlq9WJ9GjOKzm9MwsSaV?usp=share_link
 
 # step:
-1. add .env file
+1. create .env file with copy file content in drive
 2. activate virtual environment
     if use the default venv >> On terminal >>pip install -r requirements.txt
     if create new on terminal >>> 1. python -m venv .venv

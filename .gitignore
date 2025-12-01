@@ -26,3 +26,5 @@ ENV/
 # Logs / misc
 *.log
 path/to/bigfile
+.env
+.env.*
