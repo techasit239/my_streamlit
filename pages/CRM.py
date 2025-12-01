@@ -1,18 +1,18 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import altair as alt
+from datetime import datetime
 
 # ---------------------------------------------------
 # PAGE CONFIG
 # ---------------------------------------------------
 st.set_page_config(
-    page_title="Invoice & Receipt Dashboard",
+    page_title="CRM Invoice Dashboard",
     layout="wide"
 )
 
 # ---------------------------------------------------
-# LOAD & CLEAN DATA
+# LOAD & PREPARE DATA
 # ---------------------------------------------------
 @st.cache_data
 def load_data():
@@ -23,27 +23,10 @@ def load_data():
 
     df = pd.read_csv(DATA_URL)
 
-    # ลบ space หน้า/หลังชื่อคอลัมน์ เช่น " Total amount " → "Total amount"
+    # เก็บ column name ให้สะอาด เช่น " Total amount " -> "Total amount"
     df.columns = df.columns.str.strip()
 
-    # 1) Project year
-    df["project_year"] = pd.to_numeric(df["Project year"], errors="coerce")
-
-    # 2) base invoice_date (ใช้ Invoice plan date เป็นแกนเวลา)
-    df["invoice_date"] = pd.to_datetime(
-        df["Invoice plan date"], errors="coerce", infer_datetime_format=True
-    )
-
-    # ถ้า invoice_date ว่าง → fallback ไปใช้ Invoice Issued Date
-    mask_missing = df["invoice_date"].isna()
-    if mask_missing.any():
-        df.loc[mask_missing, "invoice_date"] = pd.to_datetime(
-            df.loc[mask_missing, "Invoice Issued Date"],
-            errors="coerce",
-            infer_datetime_format=True,
-        )
-
-    # 2.1) แปลงทุก date field ที่ใช้ใน analytics
+    # --- แปลงวันที่ที่สำคัญ ---
     date_cols = [
         "Invoice plan date",
         "Invoice Issued Date",
@@ -55,51 +38,38 @@ def load_data():
     for c in date_cols:
         df[c] = pd.to_datetime(df[c], errors="coerce", infer_datetime_format=True)
 
-    # 3) money columns
+    # --- แปลงตัวเลขที่สำคัญ ---
     money_cols = ["Total amount", "Invoice value"]
     for c in money_cols:
-        df[c + "_num"] = (
+        df[c] = (
             df[c]
             .astype(str)
             .str.replace(",", "", regex=False)
             .str.replace(" ", "", regex=False)
             .str.replace("-", "0", regex=False)
         )
-        df[c + "_num"] = pd.to_numeric(df[c + "_num"], errors="coerce").fillna(0.0)
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
 
-    df["invoice_amount"] = df["Invoice value_num"]
-    df["total_amount"] = df["Total amount_num"]
+    # --- เตรียม field สำหรับ CRM ---
+    today = pd.Timestamp.today().normalize()
 
-    # 4) Payment Status → category + receipt
+    # จำนวนวันจากวันนี้ไปถึง Expected Payment date
+    df["days_to_expected"] = (df["Expected Payment date"] - today).dt.days
+
+    # overdue = วันนี้เกิน Expected Payment date แล้ว
+    df["is_overdue"] = df["days_to_expected"] < 0
+
+    # ความแตกต่างระหว่าง Actual vs Expected (ใช้วิเคราะห์เร็ว/ช้า)
+    df["days_diff_actual_expected"] = (
+        df["Actual Payment received date"] - df["Expected Payment date"]
+    ).dt.days
+
+    # ทำ field ช่วยสำหรับ Paid ว่าจ่ายแล้วหรือยัง
     df["Payment Status"] = df["Payment Status"].astype(str).str.strip()
-
-    # ดึงคำแรกมาเป็น category: Paid / Invoiced / Aging / Not
-    df["Payment Category"] = df["Payment Status"].str.split(" ", n=1).str[0].str.lower()
-
-    paid_mask = df["Payment Category"] == "paid"
-
-    df["receipt_amount"] = np.where(
-        paid_mask,
-        df["invoice_amount"],
-        0.0,
-    )
-
-    # 5) Outstanding
-    df["outstanding_amount"] = df["invoice_amount"] - df["receipt_amount"]
-
-    # 6) Time dimensions
-    df["invoice_year"] = df["invoice_date"].dt.year
-    df["invoice_quarter"] = "Qtr " + df["invoice_date"].dt.quarter.astype("Int64").astype(str)
-    df["invoice_month_name"] = df["invoice_date"].dt.month_name()
-    df["invoice_year_month"] = df["invoice_date"].dt.to_period("M").astype(str)
-
-    # 7) Actual Delayed → days_late base (แปลงเป็นตัวเลข)
-    df["Actual Delayed"] = pd.to_numeric(df["Actual Delayed"], errors="coerce")
-    # เก็บไว้ใช้ใน Delay Analysis
-    df["days_late_base"] = df["Actual Delayed"]
+    df["status_lower"] = df["Payment Status"].str.lower()
+    df["is_paid"] = df["status_lower"].str.startswith("paid")
 
     return df
-
 
 
 df = load_data()
@@ -109,368 +79,155 @@ df = load_data()
 # ---------------------------------------------------
 st.sidebar.header("Filters")
 
-years = sorted([int(y) for y in df["project_year"].dropna().unique()])
-default_year = 2025 if 2025 in years else years[-1]
-year_selected = st.sidebar.radio(
-    "Project year analysis",
-    years,
-    index=years.index(default_year)
+# Filter ตาม Payment Status (CRM อยากเลือกดูสถานะต่าง ๆ ได้)
+payment_statuses = sorted(df["Payment Status"].dropna().unique())
+status_selected = st.sidebar.multiselect(
+    "Payment Status",
+    payment_statuses,
+    default=payment_statuses
 )
 
-df_filtered = df[df["project_year"] == year_selected].copy()
+df_filtered = df[df["Payment Status"].isin(status_selected)].copy()
 
-quarter_opts = ["--"] + sorted(df_filtered["invoice_quarter"].dropna().unique())
-quarter_selected = st.sidebar.selectbox("Quarter", quarter_opts, index=0)
-if quarter_selected != "--":
-    df_filtered = df_filtered[df_filtered["invoice_quarter"] == quarter_selected]
-
-month_opts = ["--"] + list(df_filtered["invoice_month_name"].dropna().unique())
-month_selected = st.sidebar.selectbox("Month", month_opts, index=0)
-if month_selected != "--":
-    df_filtered = df_filtered[df_filtered["invoice_month_name"] == month_selected]
-
+# Optional: filter ตามลูกค้า
 customers = ["All"] + sorted(df_filtered["Customer"].dropna().unique())
-customer_selected = st.sidebar.selectbox("Analysis by Customer", customers, index=0)
+customer_selected = st.sidebar.selectbox("Customer", customers, index=0)
+
 if customer_selected != "All":
     df_filtered = df_filtered[df_filtered["Customer"] == customer_selected]
 
-aging_all = sorted(df["Payment Status"].dropna().unique())
-aging_selected = st.sidebar.multiselect(
-    "Payment Status (Aging)",
-    aging_all,
-    default=aging_all
-)
-if aging_selected:
-    df_filtered = df_filtered[df_filtered["Payment Status"].isin(aging_selected)]
-
 # ---------------------------------------------------
-# TOP KPIs
+# SECTION 1: INVOICE OVERVIEW (CRM VIEW)
 # ---------------------------------------------------
-def fmt_million(x: float) -> str:
-    return f"{x/1_000_000:,.1f} M"
-
-st.markdown("## Invoice & Receipt Dashboard")
+st.title("CRM Invoice Overview")
 
 if df_filtered.empty:
     st.warning("No data for current filter selection.")
 else:
-    total_invoice = float(df_filtered["invoice_amount"].sum())
-    total_receipt = float(df_filtered["receipt_amount"].sum())
-    outstanding = float(df_filtered["outstanding_amount"].sum())
+    # เลือก column สำหรับแสดงภาพรวม CRM
+    overview_cols = [
+        "Customer",
+        "Sale order No.",
+        "Invoice value",
+        "Invoice Issued Date",
+        "Expected Payment date",
+        "Payment Status",
+        "days_to_expected",
+        "is_overdue",
+    ]
 
-    k1, k2, k3 = st.columns(3)
-    with k1:
-        st.markdown("**Sum of Total invoice billing**")
-        st.markdown(
-            f"<h1 style='color:#C00000; font-size: 36px;'>{fmt_million(total_invoice)}</h1>",
-            unsafe_allow_html=True,
-        )
-    with k2:
-        st.markdown("**Total receipt**")
-        st.markdown(
-            f"<h1 style='color:#C00000; font-size: 36px;'>{fmt_million(total_receipt)}</h1>",
-            unsafe_allow_html=True,
-        )
-    with k3:
-        st.markdown("**Outstanding balance**")
-        st.markdown(
-            f"<h1 style='color:#C00000; font-size: 36px;'>{fmt_million(outstanding)}</h1>",
-            unsafe_allow_html=True,
-        )
+    display_df = df_filtered[overview_cols].copy()
 
-st.markdown("---")
+    # แปลงชื่อ column ให้คนอ่านเข้าใจง่าย
+    display_df = display_df.rename(columns={
+        "Sale order No.": "Sale Order No.",
+        "Invoice value": "Invoice Value",
+        "Invoice Issued Date": "Invoice Issued Date",
+        "Expected Payment date": "Expected Payment Date",
+        "days_to_expected": "Days to Expected Payment",
+        "is_overdue": "Overdue?",
+    })
 
-# ---------------------------------------------------
-# MAIN CHARTS (แสดงต่อให้ df_filtered ว่างก็เช็กก่อน)
-# ---------------------------------------------------
-left_col, right_col = st.columns([1, 2])
-
-with left_col:
-    st.markdown("#### Outstanding balance by Customer")
-    if df_filtered.empty:
-        st.info("No data for current filters.")
-    else:
-        cust_group = (
-            df_filtered.groupby("Customer", as_index=False)["outstanding_amount"]
-            .sum()
-            .sort_values("outstanding_amount", ascending=True)
-        )
-        min_val = float(cust_group["outstanding_amount"].min())
-        max_val = float(cust_group["outstanding_amount"].max())
-        if min_val == max_val:
-            range_selected = (min_val, max_val)
+    # สร้างคำอธิบายข้อความ เช่น "Due in 5 days" / "Overdue by 3 days"
+    def describe_due(days):
+        if pd.isna(days):
+            return ""
+        days = int(days)
+        if days > 0:
+            return f"Due in {days} days"
+        elif days == 0:
+            return "Due today"
         else:
-            range_selected = st.slider(
-                "Outstanding balance range",
-                min_value=min_val,
-                max_value=max_val,
-                value=(min_val, max_val),
-            )
-            cust_group = cust_group[
-                cust_group["outstanding_amount"].between(range_selected[0], range_selected[1])
-            ]
+            return f"Overdue by {-days} days"
 
-        bar = (
-    alt.Chart(cust_group)
-    .mark_bar()
-    .encode(
-        x=alt.X(
-            "outstanding_amount:Q",
-            title="Outstanding balance",
-            axis=alt.Axis(format=",.0f"),
-        ),
-        y=alt.Y("Customer:N", sort="-x", title="Customer"),
-        tooltip=[
-            alt.Tooltip("Customer:N", title="Customer"),
-            alt.Tooltip("outstanding_amount:Q", title="Outstanding", format=",.0f"),
-        ],
+    display_df["Due Status"] = display_df["Days to Expected Payment"].apply(describe_due)
+
+    # จัด format ตัวเลข Invoice Value ให้มี comma
+    format_dict = {
+        "Invoice Value": "{:,.0f}".format,
+        "Days to Expected Payment": "{:+d}".format,  # ให้เห็น +/- วัน
+    }
+
+    # สร้าง style ให้แถวที่ overdue เป็นสีแดง
+    def highlight_overdue(row):
+        if row["Overdue?"]:
+            return ["color: red; font-weight: bold"] * len(row)
+        else:
+            return [""] * len(row)
+
+    styled = display_df.style.format(format_dict, na_rep="").apply(
+        highlight_overdue, axis=1
     )
-    .properties(height=320)
-)
 
-
-with right_col:
-    st.markdown(
-        "#### Sum of Total invoice billing, Outstanding balance, "
-        "Total receipt & Accumulated total receipt by Month"
+    st.subheader("Invoice list by Customer")
+    st.caption(
+        "สีแดง = วันนี้เกิน Expected Payment Date แล้ว (เกินเครดิตเทอม) | "
+        "Days to Expected Payment เป็นจำนวนวันจากวันนี้ถึงวันที่คาดว่าจะได้รับเงิน"
     )
-    if df_filtered.empty:
-        st.info("No data for current filters.")
-    else:
-        month_group = (
-            df_filtered.groupby("invoice_year_month", as_index=False)
-            .agg(
-                total_invoice=("invoice_amount", "sum"),
-                total_receipt=("receipt_amount", "sum"),
-                total_outstanding=("outstanding_amount", "sum"),
-            )
-            .sort_values("invoice_year_month")
-        )
-        month_group["acc_receipt"] = month_group["total_receipt"].cumsum()
+    st.dataframe(styled, use_container_width=True)
 
-        base = alt.Chart(month_group).encode(
-            x=alt.X("invoice_year_month:N", title="Month")
-        )
-        bar_invoice = base.mark_bar(color="#4472C4").encode(
-    y=alt.Y("total_invoice:Q", title="Amount"),
-    tooltip=[
-        "invoice_year_month",
-        "total_invoice",
-        "total_outstanding",
-        "total_receipt",
-        "acc_receipt",
-    ],
-)
-
-        bar_receipt = base.mark_bar(color="#ED7D31", opacity=0.8).encode(
-            y="total_receipt:Q"
-        )
-        line_acc = base.mark_line(color="#A020F0", point=True).encode(
-            y="acc_receipt:Q"
-        )
-        combo = (bar_invoice + bar_receipt + line_acc).properties(height=380)
-        st.altair_chart(combo, use_container_width=True)
-
+# ---------------------------------------------------
+# SECTION 2: CUSTOMER PAYMENT BEHAVIOR (FAST vs SLOW)
+# ---------------------------------------------------
 st.markdown("---")
+st.header("Customer Payment Behavior (Fast vs Slow Payers)")
 
-# ---------------------------------------------------
-# SECTION A: Delay Analysis
-# ---------------------------------------------------
-st.markdown("## ⏱️ Delay Analysis")
-if df_filtered.empty:
-    st.info("No data for Delay Analysis.")
+# ใช้ข้อมูลเฉพาะ invoice ที่จ่ายแล้ว + มี Expected & Actual Payment
+df_behavior = df[
+    df["is_paid"]
+    & df["Expected Payment date"].notna()
+    & df["Actual Payment received date"].notna()
+].copy()
+
+if df_behavior.empty:
+    st.info("No paid invoices with Expected & Actual payment dates to analyze.")
 else:
-    df_delay = df_filtered.copy()
+    # ถ้าบาง invoice ยังไม่ได้คำนวณ days_diff_actual_expected ให้ทำซ้ำอีกครั้ง (กันพลาด)
+    df_behavior["days_diff_actual_expected"] = (
+        df_behavior["Actual Payment received date"] - df_behavior["Expected Payment date"]
+    ).dt.days
 
-    # ใช้ Actual Delayed เป็น days_late ถ้าไม่มีค่อย fallback คำนวณเอง
-    df_delay["days_late"] = df_delay["days_late_base"]
-
-    mask = df_delay["days_late"].isna()
-    if mask.any():
-        df_delay.loc[mask, "days_late"] = (
-            df_delay["Actual Payment received date"] - df_delay["Invoice due date"]
-        ).dt.days
-
-    df_delay["days_late"] = pd.to_numeric(df_delay["days_late"], errors="coerce")
-
-    df_delay["delay_status"] = np.where(
-        df_delay["days_late"] > 0, "Late", "On-time"
-    )
-
-    percent_late = df_delay["delay_status"].eq("Late").mean() * 100
-    avg_days_late = df_delay["days_late"].clip(lower=0).mean()
-
-    c1, c2 = st.columns(2)
-    c1.metric("Percentage Late Payment", f"{percent_late:.1f}%")
-    c2.metric("Average Days Late", f"{avg_days_late:.1f} days")
-
-    delay_counts = df_delay["delay_status"].value_counts().reset_index()
-    delay_counts.columns = ["status", "count"]
-
-    donut_chart = (
-        alt.Chart(delay_counts)
-        .mark_arc(innerRadius=60)
-        .encode(
-            theta="count:Q",
-            color="status:N",
-            tooltip=[
-                alt.Tooltip("status:N", title="Status"),
-                alt.Tooltip("count:Q", title="Count", format=",.0f"),
-            ],
-        )
-    )
-    st.altair_chart(donut_chart, use_container_width=True)
-
-    st.markdown("#### Delay Summary Table")
-    st.dataframe(
-        df_delay[
-            ["Customer", "invoice_amount", "Payment Status", "days_late", "delay_status"]
-        ].sort_values("days_late", ascending=False),
-        use_container_width=True,
-    )
-
-
-# ---------------------------------------------------
-# SECTION B: Customer Payment Behavior Ranking
-# ---------------------------------------------------
-st.markdown("## 🏆 Customer Payment Behavior Ranking")
-if df_filtered.empty:
-    st.info("No data for Customer Ranking.")
-else:
-    df_rank = df_filtered.copy()
-    df_rank["days_late"] = df_rank["days_late_base"]
-    mask = df_rank["days_late"].isna()
-    if mask.any():
-        df_rank.loc[mask, "days_late"] = (
-            df_rank["Actual Payment received date"] - df_rank["Invoice due date"]
-        ).dt.days
-
-    df_rank["days_late"] = pd.to_numeric(df_rank["days_late"], errors="coerce")
-
+    # คำนวณเฉลี่ยต่อลูกค้า
     behavior = (
-        df_rank.groupby("Customer")["days_late"]
+        df_behavior.groupby("Customer")["days_diff_actual_expected"]
         .mean()
         .reset_index()
-        .fillna(0)
+        .rename(columns={"days_diff_actual_expected": "avg_days_diff"})
     )
 
-    best = behavior.sort_values("days_late").head(5)
-    worst = behavior.sort_values("days_late", ascending=False).head(5)
+    # ยิ่ง avg_days_diff น้อย (ติดลบมาก) = จ่ายเร็ว
+    best = behavior.sort_values("avg_days_diff").head(10)
+    worst = behavior.sort_values("avg_days_diff", ascending=False).head(10)
+
+    # แปลงคำอธิบาย
+    def describe_behavior(d):
+        if pd.isna(d):
+            return ""
+        d = float(d)
+        if d < 0:
+            return f"Pays {abs(d):.1f} days earlier on average"
+        elif d == 0:
+            return "Pays on time"
+        else:
+            return f"Pays {d:.1f} days late on average"
+
+    best["Behavior"] = best["avg_days_diff"].apply(describe_behavior)
+    worst["Behavior"] = worst["avg_days_diff"].apply(describe_behavior)
 
     b1, b2 = st.columns(2)
+
     with b1:
-        st.markdown("### ⭐ Top 5 Best Customers (Pay On-time)")
-        st.dataframe(best, use_container_width=True)
+        st.subheader("⭐ Top Fast Payers")
+        st.caption("ลูกค้าที่จ่ายเร็วกว่าคาด (ค่าติดลบมาก = ดี)")
+        st.dataframe(
+            best.rename(columns={"avg_days_diff": "Avg days (Actual - Expected)"}),
+            use_container_width=True,
+        )
+
     with b2:
-        st.markdown("### ⚠️ Top 5 Worst Customers (Pay the Latest)")
-        st.dataframe(worst, use_container_width=True)
-
-# ---------------------------------------------------
-# SECTION C: Cashflow Forecast
-# ---------------------------------------------------
-st.markdown("## 📈 Cashflow Forecast (Plan vs Actual)")
-if df_filtered.empty:
-    st.info("No data for Cashflow Forecast.")
-else:
-    df_cf = df_filtered.copy()
-    df_cf["plan_month"] = df_cf["Expected Payment date"].dt.to_period("M").astype(str)
-    df_cf["actual_month"] = df_cf["Actual Payment received date"].dt.to_period("M").astype(str)
-
-    plan = (
-        df_cf.groupby("plan_month")["invoice_amount"]
-        .sum()
-        .reset_index()
-        .rename(columns={"invoice_amount": "plan_amount"})
-    )
-    actual = (
-        df_cf.groupby("actual_month")["receipt_amount"]
-        .sum()
-        .reset_index()
-        .rename(columns={"receipt_amount": "actual_amount"})
-    )
-
-    merged = pd.merge(plan, actual, left_on="plan_month", right_on="actual_month", how="outer")
-    merged["month"] = merged["plan_month"].fillna(merged["actual_month"])
-
-    chart_cf = (
-        alt.Chart(merged)
-        .mark_line(point=True)
-        .encode(
-            x=alt.X("month:N", title="Month"),
-            y=alt.Y("plan_amount:Q", title="Amount", axis=alt.Axis(format=",.0f")),
-            tooltip=[
-                alt.Tooltip("month:N", title="Month"),
-                alt.Tooltip("plan_amount:Q", title="Plan", format=",.0f"),
-            ],
+        st.subheader("⚠️ Top Slow Payers")
+        st.caption("ลูกค้าที่จ่ายช้ากว่าคาด (ค่าสูงกว่า 0 = เสี่ยง)")
+        st.dataframe(
+            worst.rename(columns={"avg_days_diff": "Avg days (Actual - Expected)"}),
+            use_container_width=True,
         )
-        +
-        alt.Chart(merged)
-        .mark_line(point=True, color="#ED7D31")
-        .encode(
-            x="month:N",
-            y=alt.Y("actual_amount:Q", axis=alt.Axis(format=",.0f")),
-            tooltip=[
-                alt.Tooltip("month:N", title="Month"),
-                alt.Tooltip("actual_amount:Q", title="Actual", format=",.0f"),
-            ],
-        )
-    ).properties(height=400)
-
-    st.altair_chart(chart_cf, use_container_width=True)
-
-
-# ---------------------------------------------------
-# SECTION D: Calendar Heatmap
-# ---------------------------------------------------
-st.markdown("## 📅 Calendar Heatmap (Invoice Frequency)")
-if df_filtered.empty:
-    st.info("No data for Calendar Heatmap.")
-else:
-    df_cal = df_filtered.copy()
-    df_cal["date_only"] = df_cal["invoice_date"].dt.date
-
-    calendar = (
-        df_cal.groupby("date_only")["invoice_amount"]
-        .sum()
-        .reset_index()
-    )
-    calendar["weekday"] = pd.to_datetime(calendar["date_only"]).dt.weekday
-    calendar["week"] = pd.to_datetime(calendar["date_only"]).dt.isocalendar().week
-
-    heatmap = (
-        alt.Chart(calendar)
-        .mark_rect()
-        .encode(
-            x=alt.X("weekday:O", title="Day of Week"),
-            y=alt.Y("week:O", title="Week Number"),
-            color=alt.Color("invoice_amount:Q", title="Invoice Amount"),
-            tooltip=["date_only", "invoice_amount"]
-        )
-        .properties(height=350)
-    )
-    st.altair_chart(heatmap, use_container_width=True)
-
-# ---------------------------------------------------
-# DETAIL TABLE
-# ---------------------------------------------------
-st.markdown("#### Detail table")
-if df_filtered.empty:
-    st.info("No data for current filters.")
-else:
-    st.dataframe(
-        df_filtered[
-            [
-                "invoice_date",
-                "project_year",
-                "Customer",
-                "invoice_amount",
-                "receipt_amount",
-                "outstanding_amount",
-                "Payment Status",
-            ]
-        ].sort_values("invoice_date"),
-        use_container_width=True,
-    )
-
-
-
