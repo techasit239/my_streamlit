@@ -5,13 +5,15 @@ st.set_page_config(page_title="Welcome", page_icon="👋", layout="wide")
 st.title("Welcome to the Project & Invoice Hub")
 st.caption("ภาพรวมฟีเจอร์หลักและ Executive summary สำหรับผู้ใช้ใหม่")
 
-cols = st.columns(3)
+cols = st.columns(4)
 with cols[0]:
     st.page_link("pages/project.py", label="📊 Project dashboard")
 with cols[1]:
     st.page_link("pages/Invoice.py", label="🧾 Invoice dashboard")
 with cols[2]:
     st.page_link("pages/AI Integration.py", label="🤖 AI assistant")
+with cols[3]:
+    st.page_ling("page/CRM.py", label=" CRM dashboard")
 
 st.markdown("## Executive summary")
 st.write(
