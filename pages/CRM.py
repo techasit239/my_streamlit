@@ -223,15 +223,15 @@ else:
 
     # สร้าง style ให้แถวที่ overdue เป็นสีแดง
     def highlight_overdue(row):
-        try:
-            days = float(row["Days to Expected Payment"])
-        except Exception:
-            days = 0
+    status = str(row.get("Payment Status", "")).strip().lower()
+    styles = [""] * len(row)
 
-        if days < 0:
-            return ["color: red; font-weight: bold"] * len(row)
-        else:
-            return [""] * len(row)
+    if status == "aging":
+        col_index = row.index.get_loc("Expected Payment Date")
+        styles[col_index] = "color: red; font-weight: bold"
+
+    return styles
+
 
 
 
@@ -495,3 +495,4 @@ else:
         }, na_rep=""),
         use_container_width=True,
     )
+
