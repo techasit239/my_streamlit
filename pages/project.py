@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -149,68 +147,49 @@ def clean_invoice(df: pd.DataFrame) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def load_sheet_data() -> tuple[pd.DataFrame, pd.DataFrame, str]:
-    """Load data from Google Sheets, falling back to the local Excel file if needed."""
-    gsheets_error = None
-
+def load_snowflake_data() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load Project/Invoice data from Snowflake tables FINAL_PROJECT and FINAL_INVOICE."""
     try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        project_raw = conn.read(worksheet="Project", ttl="5m")
-        invoice_raw = conn.read(worksheet="Invoice", ttl="5m")
-        if project_raw is None or project_raw.empty:
-            raise ValueError("Google Sheets returned no rows for 'Project'.")
-        if invoice_raw is None:
-            invoice_raw = pd.DataFrame()
-        return clean_project(project_raw), clean_invoice(invoice_raw), "gsheets"
+        conn = st.connection("snowflake")
+        project_raw = conn.query("SELECT * FROM FINAL_PROJECT;", ttl=300)
+        invoice_raw = conn.query("SELECT * FROM FINAL_INVOICE;", ttl=300)
     except Exception as exc:  # noqa: BLE001
-        gsheets_error = exc
+        raise RuntimeError(f"ไม่สามารถดึงข้อมูลจาก Snowflake ได้: {exc}") from exc
 
-    fallback_path = Path(__file__).resolve().parent.parent / "BI Project status_Prototype_R1.xlsx"
-    absolute_path = Path("/Users/sashimild/Desktop/Nguk/NIDA MASTER DEGREE/5001/my_streamlit/BI Project status_Prototype_R1.xlsx")
-    if not fallback_path.exists() and absolute_path.exists():
-        fallback_path = absolute_path
-    if not fallback_path.exists():
-        raise RuntimeError("Unable to load from Google Sheets and fallback Excel file is missing.") from gsheets_error
+    # if project_raw is None or project_raw.empty:
+    #     raise RuntimeError("Snowflake returned no rows for FINAL_PROJECT.")
+    # if invoice_raw is None:
+    #     invoice_raw = pd.DataFrame()
 
-    try:
-        workbook = pd.ExcelFile(fallback_path)
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"Unable to read fallback Excel file: {fallback_path}") from exc
-
-    project_sheet = "Project" if "Project" in workbook.sheet_names else workbook.sheet_names[0]
-    invoice_sheet = "Invoice" if "Invoice" in workbook.sheet_names else None
-
-    project_raw = workbook.parse(project_sheet)
-    invoice_raw = workbook.parse(invoice_sheet) if invoice_sheet else pd.DataFrame()
-
-    return clean_project(project_raw), clean_invoice(invoice_raw), "excel"
+    return clean_project(project_raw), clean_invoice(invoice_raw)
 
 
 try:
-    project_df, invoice_df, data_source = load_sheet_data()
+    project_df, invoice_df = load_snowflake_data()
+    data_source = "snowflake"
 except Exception as exc:  # noqa: BLE001
     data_source = "error"
     st.title("Project Management Dashboard")
     st.error(
-        f"Data could not be loaded from Google Sheets or fallback Excel.\n\n{exc}",
+        f"Data could not be loaded from Snowflake.\n\n{exc}",
         icon="🚫",
     )
     st.stop()
 
 st.title("Project Management Dashboard")
-if data_source == "gsheets":
-    st.caption("✅ Connected to Google Sheets")
-elif data_source == "excel":
-    st.caption("📄 Loaded from fallback Excel (Google Sheets unavailable)")
+if data_source == "snowflake":
+    st.caption("❄️ Connected to Snowflake (FINAL_PROJECT / FINAL_INVOICE)")
 else:
     st.caption("🚫 Data not loaded")
 
-nav_cols = st.columns(3)
+nav_cols = st.columns(4)
 with nav_cols[0]:
     st.page_link("pages/Invoice.py", label="Go to Invoice dashboard", icon="🧾")
 with nav_cols[1]:
     st.page_link("pages/project.py", label="Stay on Project dashboard", icon="📊")
 with nav_cols[2]:
+    st.page_link("pages/CRM.py", label="Go to CRM dashboard", icon="📈")
+with nav_cols[3]:
     with st.popover("➕ Add project record", use_container_width=True):
         render_project_form(form_key="project_add_form")
 

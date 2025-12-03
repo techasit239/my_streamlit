@@ -1,15 +1,11 @@
-from pathlib import Path
-from typing import Any, Dict, Generator, List, Tuple
 import os
+from pathlib import Path
+from typing import Any, Dict, Generator, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
 from ollama import chat
 from openai import OpenAI
-from streamlit_gsheets import GSheetsConnection
-import os
-from pathlib import Path
-from typing import Optional
 
 def load_env_key(key: str, env_path: Path = Path(".env")) -> Optional[str]:
     if key in os.environ:
@@ -54,50 +50,21 @@ if OPENROUTER_API_KEY:
 # -----------------------------
 @st.cache_data(ttl=300, show_spinner=False)
 def load_project_invoice() -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, str]]:
-    """Load project/invoice data; prefer Google Sheets, fallback to local Excel."""
-    gsheets_error = None
-    meta: Dict[str, str] = {}
-
-    def resolve_excel_path() -> Path:
-        relative = Path(__file__).resolve().parent.parent / "BI Project status_Prototype-2.xlsx"
-        absolute = Path(
-            "/Users/sashimild/Desktop/Nguk/NIDA MASTER DEGREE/5001/DADS5001-6720422009/BI Project status_Prototype-2.xlsx"
-        )
-        if not relative.exists() and absolute.exists():
-            return absolute
-        return relative
-
-    excel_path = resolve_excel_path()
-    if not excel_path.exists():
-        raise RuntimeError("Invoice/Project source Excel file is missing.")
-
-    # Try Google Sheets for project
+    """Load project/invoice data from Snowflake tables FINAL_PROJECT and FINAL_INVOICE."""
+    meta: Dict[str, str] = {"project_source": "snowflake", "invoice_source": "snowflake"}
     try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        project_raw = conn.read(worksheet="Project", ttl="5m")
-        if project_raw is None or project_raw.empty:
-            raise ValueError("Google Sheets returned no rows for 'Project'.")
-        project_df = clean_project(project_raw)
-        meta["project_source"] = "gsheets"
+        conn = st.connection("snowflake")
+        project_raw = conn.query("SELECT * FROM FINAL_PROJECT;", ttl=300)
+        invoice_raw = conn.query("SELECT * FROM FINAL_INVOICE;", ttl=300)
     except Exception as exc:  # noqa: BLE001
-        gsheets_error = exc
-        workbook = pd.ExcelFile(excel_path)
-        project_sheet = "Project" if "Project" in workbook.sheet_names else workbook.sheet_names[0]
-        project_df = clean_project(workbook.parse(project_sheet))
-        meta["project_source"] = "excel"
-        meta["project_error"] = str(gsheets_error)
+        raise RuntimeError(f"ไม่สามารถดึงข้อมูลจาก Snowflake ได้: {exc}") from exc
 
-    # Invoice always from Excel (per previous requirement)
-    try:
-        workbook = pd.ExcelFile(excel_path)
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"Unable to read Excel file for invoice: {excel_path}") from exc
-    invoice_sheet = "Invoice" if "Invoice" in workbook.sheet_names else workbook.sheet_names[0]
-    invoice_df = clean_invoice(workbook.parse(invoice_sheet))
-    meta["invoice_source"] = "excel"
-    meta["excel_path"] = str(excel_path)
+    if project_raw is None or project_raw.empty:
+        raise RuntimeError("Snowflake returned no rows for FINAL_PROJECT.")
+    if invoice_raw is None:
+        invoice_raw = pd.DataFrame()
 
-    return project_df, invoice_df, meta
+    return clean_project(project_raw), clean_invoice(invoice_raw), meta
 
 
 def clean_project(df: pd.DataFrame) -> pd.DataFrame:
@@ -319,10 +286,11 @@ with nav_cols[0]:
 with nav_cols[1]:
     st.page_link("pages/Invoice.py", label="🧾 Invoice dashboard")
 with nav_cols[2]:
-    with st.popover("➕ Add project record", use_container_width=True):
-        render_project_form(form_key="ai_add_project_form")
-    with st.popover("➕ Add invoice record", use_container_width=True):
-        render_invoice_form(form_key="ai_add_invoice_form")
+    st.page_link("pages/CRM.py", label="📈 CRM dashboard")
+with st.popover("➕ Add project record", use_container_width=True):
+    render_project_form(form_key="ai_add_project_form")
+with st.popover("➕ Add invoice record", use_container_width=True):
+    render_invoice_form(form_key="ai_add_invoice_form")
 
 try:
     project_df, invoice_df, meta = load_project_invoice()

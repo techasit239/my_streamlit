@@ -13,22 +13,40 @@ st.set_page_config(
     layout="wide"
 )
 
+# Header section
+st.title("CRM Invoice Dashboard")
+st.caption("❄️ Data source: Snowflake (FINAL_INVOICE)")
+nav_cols = st.columns(4)
+with nav_cols[0]:
+    st.page_link("pages/project.py", label="📊 Go to Project dashboard")
+with nav_cols[1]:
+    st.page_link("pages/Invoice.py", label="🧾 Go to Invoice dashboard")
+with nav_cols[2]:
+    st.page_link("pages/CRM.py", label="📈 Stay on CRM dashboard")
+with nav_cols[3]:
+    with st.popover("➕ Add invoice record", use_container_width=True):
+        # Reuse the add_record_form invoice form
+        from add_record_form import render_invoice_form
+
+        render_invoice_form(form_key="crm_add_invoice_form")
+
 # ---------------------------------------------------
 # LOAD & PREPARE DATA
 # ---------------------------------------------------
-@st.cache_data
+@st.cache_data(ttl=300, show_spinner=False)
 def load_data():
-    DATA_URL = (
-        "https://raw.githubusercontent.com/techasit239/my_streamlit/"
-        "refs/heads/main/BI%20Project%20status_Prototype_R1_invoice.csv"
-    )
+    """Load invoice data from Snowflake FINAL_INVOICE and clean for CRM."""
+    try:
+        conn = st.connection("snowflake")
+        df_raw = conn.query("SELECT * FROM FINAL_INVOICE;", ttl=300)
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"ไม่สามารถดึงข้อมูลจาก Snowflake ได้: {exc}") from exc
+    if df_raw is None or df_raw.empty:
+        raise RuntimeError("Snowflake returned no rows for FINAL_INVOICE.")
 
-    df = pd.read_csv(DATA_URL)
-
-    # เก็บ column name ให้สะอาด เช่น " Total amount " -> "Total amount"
+    df = df_raw.copy()
     df.columns = df.columns.str.strip()
 
-    # --- แปลงวันที่ที่สำคัญ ---
     date_cols = [
         "Invoice plan date",
         "Invoice Issued Date",
@@ -38,39 +56,31 @@ def load_data():
         "Actual Payment received date",
     ]
     for c in date_cols:
-        df[c] = pd.to_datetime(df[c], errors="coerce", infer_datetime_format=True)
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c], errors="coerce", infer_datetime_format=True)
 
-    # --- แปลงตัวเลขที่สำคัญ ---
     money_cols = ["Total amount", "Invoice value"]
     for c in money_cols:
-        df[c] = (
-            df[c]
-            .astype(str)
-            .str.replace(",", "", regex=False)
-            .str.replace(" ", "", regex=False)
-            .str.replace("-", "0", regex=False)
-        )
-        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
+        if c in df.columns:
+            df[c] = (
+                df[c]
+                .astype(str)
+                .str.replace(",", "", regex=False)
+                .str.replace(" ", "", regex=False)
+                .str.replace("-", "0", regex=False)
+            )
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
 
-    # --- เตรียม field สำหรับ CRM ---
     today = pd.Timestamp.today().normalize()
-
-    # จำนวนวันจากวันนี้ไปถึง Expected Payment date
     df["days_to_expected"] = (df["Expected Payment date"] - today).dt.days
-
-    # overdue = วันนี้เกิน Expected Payment date แล้ว
     df["is_overdue"] = df["days_to_expected"] < 0
-
-    # ความแตกต่างระหว่าง Actual vs Expected (ใช้วิเคราะห์เร็ว/ช้า)
     df["days_diff_actual_expected"] = (
         df["Actual Payment received date"] - df["Expected Payment date"]
     ).dt.days
 
-    # ทำ field ช่วยสำหรับ Paid ว่าจ่ายแล้วหรือยัง
     df["Payment Status"] = df["Payment Status"].astype(str).str.strip()
     df["status_lower"] = df["Payment Status"].str.lower()
     df["is_paid"] = df["status_lower"].str.startswith("paid")
-
 
     return df
 
@@ -87,10 +97,13 @@ payment_statuses = sorted(df["Payment Status"].dropna().unique())
 status_selected = st.sidebar.multiselect(
     "Payment Status",
     payment_statuses,
-    default=payment_statuses
+    default=[],
+    help="ถ้าไม่เลือกจะแสดงทุกสถานะ",
 )
 
-df_filtered = df[df["Payment Status"].isin(status_selected)].copy()
+df_filtered = df.copy()
+if status_selected:
+    df_filtered = df_filtered[df_filtered["Payment Status"].isin(status_selected)]
 
 # Optional: filter ตามลูกค้า
 customers = ["All"] + sorted(df_filtered["Customer"].dropna().unique())

@@ -1,9 +1,6 @@
-from pathlib import Path
-
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
 
 from add_record_form import render_invoice_form
 
@@ -113,62 +110,23 @@ def combine_columns(df: pd.DataFrame, primary: str, secondary: str) -> pd.Series
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_data() -> tuple[pd.DataFrame, pd.DataFrame, dict]:
-    """
-    Load data with these rules:
-    - Project: Google Sheets first, fallback to Excel.
-    - Invoice: Always from the Excel file (Invoice sheet).
-    """
-
-    def resolve_excel_path() -> Path:
-        relative = Path(__file__).resolve().parent.parent / "BI Project status_Prototype_R1.xlsx"
-        absolute = Path(
-            "/Users/sashimild/Desktop/Nguk/NIDA MASTER DEGREE/5001/my_streamlit/BI Project status_Prototype_R1.xlsx"
-        )
-        if not relative.exists() and absolute.exists():
-            return absolute
-        return relative
-
-    excel_path = resolve_excel_path()
-    if not excel_path.exists():
-        raise RuntimeError("Invoice source Excel file is missing.")
-
-    gsheets_error = None
-    project_source = "excel"
-
-    # Attempt to load project from Google Sheets.
+    """Load Project and Invoice data from Snowflake tables FINAL_PROJECT and FINAL_INVOICE."""
     try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        project_raw = conn.read(worksheet="Project", ttl="5m")
-        if project_raw is None or project_raw.empty:
-            raise ValueError("Google Sheets returned no rows for 'Project'.")
-        project_df = clean_project(project_raw)
-        project_source = "gsheets"
+        conn = st.connection("snowflake")
+        project_raw = conn.query("SELECT * FROM FINAL_PROJECT;", ttl=300)
+        invoice_raw = conn.query("SELECT * FROM FINAL_INVOICE;", ttl=300)
     except Exception as exc:  # noqa: BLE001
-        gsheets_error = exc
-        try:
-            workbook = pd.ExcelFile(excel_path)
-        except Exception as exc2:  # noqa: BLE001
-            raise RuntimeError(f"Unable to read fallback Excel file for project: {excel_path}") from exc2
+        raise RuntimeError(f"ไม่สามารถดึงข้อมูลจาก Snowflake ได้: {exc}") from exc
 
-        project_sheet = "Project" if "Project" in workbook.sheet_names else workbook.sheet_names[0]
-        project_raw = workbook.parse(project_sheet)
-        project_df = clean_project(project_raw)
-        project_source = "excel"
+    # if project_raw is None or project_raw.empty:
+    #     raise RuntimeError("Snowflake returned no rows for FINAL_PROJECT.")
+    # if invoice_raw is None:
+    #     invoice_raw = pd.DataFrame()
 
-    # Invoice always from Excel.
-    try:
-        workbook = pd.ExcelFile(excel_path)
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"Unable to read Excel file for invoice: {excel_path}") from exc
-
-    invoice_sheet = "Invoice" if "Invoice" in workbook.sheet_names else workbook.sheet_names[0]
-    invoice_raw = workbook.parse(invoice_sheet)
+    project_df = clean_project(project_raw)
     invoice_df = clean_invoice(invoice_raw)
 
-    if project_df is None or invoice_df is None:
-        raise RuntimeError("Failed to load project or invoice data.") from gsheets_error
-
-    return project_df, invoice_df, {"project": project_source, "invoice": "excel", "excel_path": str(excel_path)}
+    return project_df, invoice_df, {"project": "snowflake", "invoice": "snowflake"}
 
 
 try:
@@ -180,15 +138,16 @@ except Exception as exc:  # noqa: BLE001
 
 st.title("Invoice Dashboard")
 st.caption(
-    f"Project source: {'✅ Google Sheets' if sources.get('project') == 'gsheets' else '📄 Excel'}\n"
-    f"Invoice source: 📄 Excel ({Path(sources.get('excel_path', '')).name})"
+    "❄️ Data source: Snowflake (FINAL_PROJECT / FINAL_INVOICE)"
 )
-nav_cols = st.columns(3)
+nav_cols = st.columns(4)
 with nav_cols[0]:
     st.page_link("pages/project.py", label="Go to Project dashboard", icon="📊")
 with nav_cols[1]:
     st.page_link("pages/Invoice.py", label="Stay on Invoice dashboard", icon="🧾")
 with nav_cols[2]:
+    st.page_link("pages/CRM.py", label="Go to CRM dashboard", icon="📈")
+with nav_cols[3]:
     with st.popover("➕ Add invoice record", use_container_width=True):
         render_invoice_form(form_key="invoice_add_form")
 

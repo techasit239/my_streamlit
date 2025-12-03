@@ -3,7 +3,6 @@ from typing import Any, Dict
 
 import pandas as pd
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
 
 
 _STYLE_KEY = "_add_record_modal_style_injected"
@@ -56,25 +55,24 @@ def safe_number(value: Any):
     return None if value in ("", None) else value
 
 
-def load_sheet(conn: GSheetsConnection, worksheet: str) -> pd.DataFrame:
-    df = conn.read(worksheet=worksheet, ttl="2m")
-    return pd.DataFrame() if df is None else pd.DataFrame(df)
-
-
-def append_row(conn: GSheetsConnection, worksheet: str, row: Dict[str, Any]) -> None:
-    current = load_sheet(conn, worksheet)
-    updated = pd.concat([current, pd.DataFrame([row])], ignore_index=True)
-    conn.update(worksheet=worksheet, data=updated)
+def append_row_snowflake(table: str, row: Dict[str, Any]) -> None:
+    """
+    Append a single row to Snowflake table using Streamlit's Snowflake connection.
+    The table must exist (FINAL_PROJECT / FINAL_INVOICE).
+    """
+    conn = st.connection("snowflake")
+    # Build parameterized insert
+    cols = list(row.keys())
+    placeholders = ", ".join([f":{i+1}" for i in range(len(cols))])
+    col_list = ", ".join([f'"{c}"' for c in cols])
+    values = [row[c] for c in cols]
+    sql = f'INSERT INTO {table} ({col_list}) VALUES ({placeholders})'
+    conn.execute(sql, values)
 
 
 def render_project_form(form_key: str = "project_add_form") -> None:
     """Render the Project-only form (no target dropdown)."""
     inject_add_record_modal_style()
-    try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-    except Exception as exc:  # noqa: BLE001
-        st.error(f"ไม่สามารถเชื่อมต่อ Google Sheets ได้: {exc}")
-        return
 
     with st.form(form_key, clear_on_submit=True):
         st.subheader("Project record")
@@ -117,7 +115,7 @@ def render_project_form(form_key: str = "project_add_form") -> None:
                 "Created at": datetime.datetime.utcnow().isoformat(),
             }
             try:
-                append_row(conn, "Project", row)
+                append_row_snowflake("FINAL_PROJECT", row)
                 st.cache_data.clear()
                 st.success("บันทึก Project สำเร็จ")
             except Exception as exc:  # noqa: BLE001
@@ -127,11 +125,6 @@ def render_project_form(form_key: str = "project_add_form") -> None:
 def render_invoice_form(form_key: str = "invoice_add_form") -> None:
     """Render the Invoice-only form (no target dropdown)."""
     inject_add_record_modal_style()
-    try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-    except Exception as exc:  # noqa: BLE001
-        st.error(f"ไม่สามารถเชื่อมต่อ Google Sheets ได้: {exc}")
-        return
 
     with st.form(form_key, clear_on_submit=True):
         st.subheader("Invoice record")
@@ -166,7 +159,7 @@ def render_invoice_form(form_key: str = "invoice_add_form") -> None:
                 "Created at": datetime.datetime.utcnow().isoformat(),
             }
             try:
-                append_row(conn, "Invoice", row)
+                append_row_snowflake("FINAL_INVOICE", row)
                 st.cache_data.clear()
                 st.success("บันทึก Invoice สำเร็จ")
             except Exception as exc:  # noqa: BLE001
