@@ -120,9 +120,9 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     """
 
     def resolve_excel_path() -> Path:
-        relative = Path(__file__).resolve().parent.parent / "BI Project status_Prototype-2.xlsx"
+        relative = Path(__file__).resolve().parent.parent / "BI Project status_Prototype_R1.xlsx"
         absolute = Path(
-            "/Users/sashimild/Desktop/Nguk/NIDA MASTER DEGREE/5001/DADS5001-6720422009/BI Project status_Prototype-2.xlsx"
+            "/Users/sashimild/Desktop/Nguk/NIDA MASTER DEGREE/5001/my_streamlit/BI Project status_Prototype_R1.xlsx"
         )
         if not relative.exists() and absolute.exists():
             return absolute

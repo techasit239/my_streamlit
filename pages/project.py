@@ -165,8 +165,8 @@ def load_sheet_data() -> tuple[pd.DataFrame, pd.DataFrame, str]:
     except Exception as exc:  # noqa: BLE001
         gsheets_error = exc
 
-    fallback_path = Path(__file__).resolve().parent.parent / "BI Project status_Prototype-2.xlsx"
-    absolute_path = Path("/Users/sashimild/Desktop/Nguk/NIDA MASTER DEGREE/5001/DADS5001-6720422009/BI Project status_Prototype-2.xlsx")
+    fallback_path = Path(__file__).resolve().parent.parent / "BI Project status_Prototype_R1.xlsx"
+    absolute_path = Path("/Users/sashimild/Desktop/Nguk/NIDA MASTER DEGREE/5001/my_streamlit/BI Project status_Prototype_R1.xlsx")
     if not fallback_path.exists() and absolute_path.exists():
         fallback_path = absolute_path
     if not fallback_path.exists():
