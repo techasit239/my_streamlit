@@ -226,9 +226,9 @@ else:
         status = str(row.get("Payment Status", "")).strip().lower()
         styles = [""] * len(row)
 
-    if status == "aging":
-        col_index = row.index.get_loc("Expected Payment Date")
-        styles[col_index] = "color: red; font-weight: bold"
+        if status == "aging":
+            col_index = row.index.get_loc("Expected Payment Date")
+            styles[col_index] = "color: red; font-weight: bold"
 
     return styles
 
@@ -495,5 +495,6 @@ else:
         }, na_rep=""),
         use_container_width=True,
     )
+
 
 
