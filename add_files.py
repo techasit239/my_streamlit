@@ -3,6 +3,7 @@ from snowflake.snowpark import Session
 import pandas as pd
 from snowflake.snowpark.files import SnowflakeFile
 import re
+import sqlalchemy
 
 # --- PART 1: Your Transformation Logic ---
 def main(session: snowpark.Session):

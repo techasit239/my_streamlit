@@ -3,6 +3,7 @@ import plotly.express as px
 import streamlit as st
 
 from add_record_form import render_invoice_form
+from data_cache import load_cached_data, refresh_cache
 
 st.set_page_config(page_title="Invoice Dashboard", page_icon="🧾", layout="wide")
 
@@ -108,29 +109,12 @@ def combine_columns(df: pd.DataFrame, primary: str, secondary: str) -> pd.Series
     return primary_series.combine_first(secondary_series)
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def load_data() -> tuple[pd.DataFrame, pd.DataFrame, dict]:
-    """Load Project and Invoice data from Snowflake tables FINAL_PROJECT and FINAL_INVOICE."""
-    try:
-        conn = st.connection("snowflake")
-        project_raw = conn.query("SELECT * FROM FINAL_PROJECT;", ttl=300)
-        invoice_raw = conn.query("SELECT * FROM FINAL_INVOICE;", ttl=300)
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"ไม่สามารถดึงข้อมูลจาก Snowflake ได้: {exc}") from exc
-
-    # if project_raw is None or project_raw.empty:
-    #     raise RuntimeError("Snowflake returned no rows for FINAL_PROJECT.")
-    # if invoice_raw is None:
-    #     invoice_raw = pd.DataFrame()
-
-    project_df = clean_project(project_raw)
-    invoice_df = clean_invoice(invoice_raw)
-
-    return project_df, invoice_df, {"project": "snowflake", "invoice": "snowflake"}
-
 
 try:
-    project_df, invoice_df, sources = load_data()
+    refresh_cache()
+    project_df_raw, invoice_df_raw = load_cached_data()
+    project_df = clean_project(project_df_raw)
+    invoice_df = clean_invoice(invoice_df_raw)
 except Exception as exc:  # noqa: BLE001
     st.title("Invoice Dashboard")
     st.error(f"Data could not be loaded.\n\n{exc}", icon="🚫")
@@ -138,7 +122,7 @@ except Exception as exc:  # noqa: BLE001
 
 st.title("Invoice Dashboard")
 st.caption(
-    "❄️ Data source: Snowflake (FINAL_PROJECT / FINAL_INVOICE)"
+    "❄️ Using DuckDB cache from Snowflake (FINAL_PROJECT / FINAL_INVOICE)"
 )
 nav_cols = st.columns(4)
 with nav_cols[0]:

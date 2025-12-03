@@ -9,4 +9,8 @@ st-gsheets-connection
 openpyxl
 pypdf
 ollama
+duckdb
 openai
+altair
+sqlalchemy
+streamlit-gsheets-connection

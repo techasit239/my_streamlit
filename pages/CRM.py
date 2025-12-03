@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import altair as alt
+from data_cache import load_cached_data, refresh_cache
 
 
 # ---------------------------------------------------
@@ -13,9 +14,50 @@ st.set_page_config(
     layout="wide"
 )
 
+def clean_invoice(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = df.columns.str.strip()
+    date_cols = [
+        "Invoice plan date",
+        "Invoice Issued Date",
+        "Invoice due date",
+        "Plan payment date",
+        "Expected Payment date",
+        "Actual Payment received date",
+    ]
+    for c in date_cols:
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c], errors="coerce", infer_datetime_format=True)
+    money_cols = ["Total amount", "Invoice value"]
+    for c in money_cols:
+        if c in df.columns:
+            df[c] = (
+                df[c]
+                .astype(str)
+                .str.replace(",", "", regex=False)
+                .str.replace(" ", "", regex=False)
+                .str.replace("-", "0", regex=False)
+            )
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
+    today = pd.Timestamp.today().normalize()
+    if "Expected Payment date" in df.columns:
+        df["days_to_expected"] = (df["Expected Payment date"] - today).dt.days
+        df["is_overdue"] = df["days_to_expected"] < 0
+    else:
+        df["days_to_expected"] = pd.NA
+        df["is_overdue"] = False
+    if {"Actual Payment received date", "Expected Payment date"}.issubset(df.columns):
+        df["days_diff_actual_expected"] = (
+            df["Actual Payment received date"] - df["Expected Payment date"]
+        ).dt.days
+    df["Payment Status"] = df["Payment Status"].astype(str).str.strip()
+    df["status_lower"] = df["Payment Status"].str.lower()
+    df["is_paid"] = df["status_lower"].str.startswith("paid")
+    return df
+
 # Header section
 st.title("CRM Invoice Dashboard")
-st.caption("❄️ Data source: Snowflake (FINAL_INVOICE)")
+st.caption("❄️ Using DuckDB cache from Snowflake (FINAL_INVOICE)")
 nav_cols = st.columns(4)
 with nav_cols[0]:
     st.page_link("pages/project.py", label="📊 Go to Project dashboard")
@@ -33,59 +75,9 @@ with nav_cols[3]:
 # ---------------------------------------------------
 # LOAD & PREPARE DATA
 # ---------------------------------------------------
-@st.cache_data(ttl=300, show_spinner=False)
-def load_data():
-    """Load invoice data from Snowflake FINAL_INVOICE and clean for CRM."""
-    try:
-        conn = st.connection("snowflake")
-        df_raw = conn.query("SELECT * FROM FINAL_INVOICE;", ttl=300)
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"ไม่สามารถดึงข้อมูลจาก Snowflake ได้: {exc}") from exc
-    if df_raw is None or df_raw.empty:
-        raise RuntimeError("Snowflake returned no rows for FINAL_INVOICE.")
-
-    df = df_raw.copy()
-    df.columns = df.columns.str.strip()
-
-    date_cols = [
-        "Invoice plan date",
-        "Invoice Issued Date",
-        "Invoice due date",
-        "Plan payment date",
-        "Expected Payment date",
-        "Actual Payment received date",
-    ]
-    for c in date_cols:
-        if c in df.columns:
-            df[c] = pd.to_datetime(df[c], errors="coerce", infer_datetime_format=True)
-
-    money_cols = ["Total amount", "Invoice value"]
-    for c in money_cols:
-        if c in df.columns:
-            df[c] = (
-                df[c]
-                .astype(str)
-                .str.replace(",", "", regex=False)
-                .str.replace(" ", "", regex=False)
-                .str.replace("-", "0", regex=False)
-            )
-            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
-
-    today = pd.Timestamp.today().normalize()
-    df["days_to_expected"] = (df["Expected Payment date"] - today).dt.days
-    df["is_overdue"] = df["days_to_expected"] < 0
-    df["days_diff_actual_expected"] = (
-        df["Actual Payment received date"] - df["Expected Payment date"]
-    ).dt.days
-
-    df["Payment Status"] = df["Payment Status"].astype(str).str.strip()
-    df["status_lower"] = df["Payment Status"].str.lower()
-    df["is_paid"] = df["status_lower"].str.startswith("paid")
-
-    return df
-
-
-df = load_data()
+refresh_cache()
+project_df_raw, df = load_cached_data()
+df = clean_invoice(df)
 
 # ---------------------------------------------------
 # SIDEBAR FILTERS
@@ -331,69 +323,6 @@ else:
         )
 
 
-if "theme" not in st.session_state:
-    st.session_state.theme = "light"   # default
-
-def toggle_theme():
-    if st.session_state.theme == "light":
-        st.session_state.theme = "dark"
-    else:
-        st.session_state.theme = "light"
-
-# Sidebar button
-st.sidebar.markdown("## Theme")
-st.sidebar.button(
-    "🌞 / 🌙 Toggle Theme",
-    on_click=toggle_theme
-)
-
-def apply_theme():
-    if st.session_state.theme == "dark":
-        st.markdown(
-            """
-            <style>
-            body {
-                background-color: #121212;
-                color: #ffffff;
-            }
-            .stApp {
-                background-color: #121212;
-                color: #ffffff;
-            }
-            .css-10trblm, .css-1d391kg {
-                color: #ffffff !important;
-            }
-            table, th, td {
-                color: #ffffff !important;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True
-        )
-    else:
-        st.markdown(
-            """
-            <style>
-            body {
-                background-color: #ffffff;
-                color: #000000;
-            }
-            .stApp {
-                background-color: #ffffff;
-                color: #000000;
-            }
-            table, th, td {
-                color: #000000 !important;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True
-        )
-
-apply_theme()
-
-
-
 # ---------------------------------------------------
 # SECTION 4: Customer Lifetime Value (CLV)
 # ---------------------------------------------------
@@ -508,8 +437,6 @@ else:
         }, na_rep=""),
         use_container_width=True,
     )
-
-
 
 
 
