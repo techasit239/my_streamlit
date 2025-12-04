@@ -1,16 +1,19 @@
+import os
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
-
 from add_record_form import render_project_form
-from data_cache import load_cached_data, refresh_cache
+from data_cache import load_cached_data, refresh_cache, load_cached_meta, load_env_key
+from openai import OpenAI
 
-try:
-    from ollama import chat as ollama_chat
-except Exception:
-    ollama_chat = None
+OPENROUTER_API_KEY = load_env_key("OPENROUTER_API_KEY")
+openrouter_client = None
+if OPENROUTER_API_KEY:
+    try:
+        openrouter_client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=OPENROUTER_API_KEY)
+    except Exception:
+        openrouter_client = None
 
 st.set_page_config(page_title="Project Management", page_icon="📊", layout="wide")
 
@@ -36,15 +39,15 @@ def metric_card(label: str, value: str, fg: str = "#0f172a", bg: str = "#f5f7fb"
     """
 
 
-def ai_chart_summary(title: str, df: pd.DataFrame, hint: str, key: str) -> None:
+def ai_chart_summary(title: str, df: pd.DataFrame, hint: str, key: str, meta_text: str = "") -> None:
     """
     Render a button that asks AI to summarize a chart based on its data.
     Keeps the latest summary in session_state until page refresh/leave.
     """
     state_key = f"ai_summary_{key}"
     if st.button(f"🤖 AI summarize: {title}", key=key, use_container_width=True):
-        if ollama_chat is None:
-            st.error("AI client (ollama) is not available on this host.")
+        if openrouter_client is None:
+            st.error("OpenRouter client is not available. Set OPENROUTER_API_KEY in environment/.env.")
             return
         data_preview = "No data"
         if df is not None and not df.empty:
@@ -54,6 +57,8 @@ def ai_chart_summary(title: str, df: pd.DataFrame, hint: str, key: str) -> None:
             "สรุปกราฟด้านล่างเป็น bullet 2-4 ข้อ ระบุแนวโน้ม จุดสูง/ต่ำ ความเสี่ยง และข้อเสนอแนะที่เป็นไปได้ "
             "ถ้าข้อมูลไม่พอให้บอกอย่างตรงไปตรงมา"
         )
+        if meta_text:
+            system_prompt += f"\n\nข้อมูล schema/คำอธิบายคอลัมน์:\n{meta_text}"
         user_prompt = (
             f"หัวข้อกราฟ: {title}\n"
             f"บริบทกราฟ: {hint}\n"
@@ -62,14 +67,14 @@ def ai_chart_summary(title: str, df: pd.DataFrame, hint: str, key: str) -> None:
         )
         with st.spinner("กำลังสรุปด้วย AI..."):
             try:
-                resp = ollama_chat(
-                    model="gemma3",
+                resp = openrouter_client.chat.completions.create(
+                    model="tngtech/deepseek-r1t2-chimera:free",
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
                 )
-                st.session_state[state_key] = resp["message"]["content"]
+                st.session_state[state_key] = resp.choices[0].message.content
             except Exception as exc:  # noqa: BLE001
                 st.error(f"AI summary failed: {exc}")
     if state_key in st.session_state:
@@ -147,11 +152,36 @@ def clean_invoice(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def meta_text_for_project(meta_df: pd.DataFrame) -> str:
+    """
+    Convert COLUMN_META rows to a compact text block for the AI prompt (project tables only).
+    Expected columns: Table_name, Field_name, Description.
+    """
+    if meta_df is None or meta_df.empty:
+        return ""
+    cols = {c.strip().lower(): c for c in meta_df.columns}
+    if not {"table_name", "field_name", "description"}.issubset(set(cols)):
+        return ""
+    tbl_col = cols["table_name"]
+    fld_col = cols["field_name"]
+    desc_col = cols["description"]
+
+    meta_df = meta_df.copy()
+    meta_df[tbl_col] = meta_df[tbl_col].astype(str).str.lower().str.strip()
+    meta_df[fld_col] = meta_df[fld_col].astype(str).str.strip()
+    meta_df[desc_col] = meta_df[desc_col].astype(str).str.strip()
+    filtered = meta_df[meta_df[tbl_col].isin(["final_project", "project"])]
+    lines = [f"{r[fld_col]}: {r[desc_col]}" for _, r in filtered.head(80).iterrows()]
+    return "\n".join(lines)
+
+
 try:
     refresh_cache()
     project_df_raw, invoice_df_raw = load_cached_data()
     project_df = clean_project(project_df_raw)
     invoice_df = clean_invoice(invoice_df_raw)
+    meta_df = load_cached_meta()
+    project_meta_text = meta_text_for_project(meta_df)
     data_source = "duckdb_cache"
 except Exception as exc:  # noqa: BLE001
     data_source = "error"
@@ -318,6 +348,7 @@ with val_col_left:
             order_summary[["Order display", "Project Value", "Balance"]],
             "Each row is an order; Project Value and Balance are amounts.",
             key="ai_order_summary",
+            meta_text=project_meta_text,
         )
     else:
         st.info("No order number data to display.")
@@ -363,6 +394,7 @@ with val_col_right:
         status_df,
         "Gauge shows average progress percentage; counts show number of projects per status.",
         key="ai_progress_gauge",
+        meta_text=project_meta_text,
     )
 
 st.divider()
@@ -392,6 +424,7 @@ with pie_col1:
             engineer_value,
             "Sum of project value by project engineer; values are currency amounts.",
             key="ai_engineer_pie",
+            meta_text=project_meta_text,
         )
     else:
         st.info("No engineer data.")
@@ -417,6 +450,7 @@ with pie_col2:
             customer_value,
             "Sum of project value by customer; values are currency amounts.",
             key="ai_customer_pie",
+            meta_text=project_meta_text,
         )
     else:
         st.info("No customer data.")
@@ -453,6 +487,7 @@ with table_col_left:
             qty_by_manu,
             "Sum of quantity (Qty) grouped by manufacturer and product; sorted by Qty.",
             key="ai_manu_qty",
+            meta_text=project_meta_text,
         )
     else:
         st.info("No manufacturing data.")
@@ -483,6 +518,7 @@ with table_col_right:
             phrase_counts,
             "Counts of project phrases/keywords; top 15 shown.",
             key="ai_phrase_counts",
+            meta_text=project_meta_text,
         )
     else:
         st.info("No phrase data.")

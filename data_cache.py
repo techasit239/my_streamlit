@@ -1,7 +1,9 @@
 import duckdb
 import streamlit as st
 import pandas as pd
-
+import os
+from pathlib import Path
+from typing import Any, Dict, Generator, List, Optional, Tuple
 
 @st.cache_resource
 def get_duck() -> duckdb.DuckDBPyConnection:
@@ -53,3 +55,17 @@ def load_cached_meta() -> pd.DataFrame:
         return con.execute("SELECT * FROM column_meta").df()
     except Exception:
         return pd.DataFrame(columns=["Table_name", "Field_name", "Description"])
+
+
+def load_env_key(key: str, env_path: Path = Path(".env")) -> Optional[str]:
+    if key in os.environ:
+        return os.environ[key]
+    if not env_path.exists():
+        return None
+    for line in env_path.read_text().splitlines():
+        if not line or line.strip().startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        if k.strip() == key:
+            return v.strip().strip('"').strip("'")
+    return None
